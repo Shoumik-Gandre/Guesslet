@@ -8,6 +8,8 @@ from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
     BitsAndBytesConfig,
+)
+from peft import (
     LoraConfig,
     TaskType,
     prepare_model_for_kbit_training,
