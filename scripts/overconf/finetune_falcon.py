@@ -1,5 +1,7 @@
+from pathlib import Path
 from .benchmark_falcon import falcon_tokenize
-from guesslet.prompts.cqa_prompt import PromptDict, CommonSenseQAPrompt
+from guesslet.prompts.cqa_prompt import CommonSenseQAPrompt
+import transformers
 from transformers import (
     TrainingArguments, 
     Trainer,
@@ -19,13 +21,14 @@ import torch
 import numpy as np
 from datasets import load_dataset
 from functools import partial
+import typer
 
 
-def main():
-    model_name = "tiiuae/falcon-7b"
+def main(model_save_path: str):
+    transformers.logging.set_verbosity_error()
     RANDOM_SEED = 38
-    dataset = load_dataset("tau/commonsense_qa")
     model_name = "tiiuae/falcon-7b"
+    dataset = load_dataset("tau/commonsense_qa")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     prompter = CommonSenseQAPrompt()
 
@@ -50,7 +53,7 @@ def main():
     data_collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
 
     arguments = TrainingArguments(
-        output_dir="./results",
+        output_dir="/content/results",
         num_train_epochs=3,
         learning_rate=2e-5,
         per_device_train_batch_size=32,
@@ -68,7 +71,7 @@ def main():
         lr_scheduler_type="cosine_with_restarts",
         lr_scheduler_kwargs={
             "num_cycles": 10
-        }
+        },
     )
 
     # Model loading with 4-bit for QLoRA
@@ -103,7 +106,9 @@ def main():
         data_collator=data_collator,
         callbacks = [EarlyStoppingCallback(10)])
     trainer.train()
+    Path(model_save_path).parent.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(model_save_path) 
 
 
 if __name__ == '__main__':
-    main()
+    typer.run(main)
