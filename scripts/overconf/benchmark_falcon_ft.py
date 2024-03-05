@@ -1,7 +1,7 @@
 from functools import partial
 from guesslet import PromptDict, CommonSenseQAPrompt, CommonSenseQAQuestionPrompt, FewShotPreppender
-from transformers import PreTrainedTokenizer, AutoTokenizer, AutoModelForCausalLM
-from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling
+from transformers import PreTrainedTokenizer, AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig, DataCollatorForLanguageModeling
+from peft import PeftModel
 from datasets import load_dataset
 import torch
 from torch.utils.data import DataLoader
@@ -19,27 +19,13 @@ def answer_key_to_index(sample):
     return {'answer': ord(sample['answer']) - ord('A')}
 
 
-def main(output_path: str):
+def main(output_path: str, peft_model_id: str):
     RANDOM_SEED = 38
     model_name = "tiiuae/falcon-7b"
     dataset = load_dataset("tau/commonsense_qa")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    prompter = CommonSenseQAPrompt()
     question_prompter = CommonSenseQAQuestionPrompt()
 
-    # Few Shot
-    rng = np.random.default_rng(seed=RANDOM_SEED)
-    few_shot_indexes = rng.choice(dataset["train"].num_rows, size=3, replace=False)
-    fewshot_examples = (
-        dataset["train"]
-            .shuffle(seed=RANDOM_SEED)
-            # Select the quantity of few shot examples
-            .select(few_shot_indexes)
-            # Create prompt string from structured data
-            .map(prompter, desc="Prompt Creation: ")
-    )
-
-    few_shot_preppeder = FewShotPreppender(examples=fewshot_examples['prompt'])
 
     # Prepare inference Dataset
     inference_dataset = (
@@ -47,7 +33,6 @@ def main(output_path: str):
         # Create prompt string from structured data
         .map(question_prompter, desc="Prompt Creation: ")
         # Prepend few shot strings
-        .map(few_shot_preppeder, desc="Few Shot Prepend: ")
         .map(answer_key_to_index, desc='Ans to Idx: ')
         .map(partial(falcon_tokenize, tokenizer=tokenizer),
             batched=True,
@@ -64,7 +49,6 @@ def main(output_path: str):
 
     # Load Model
     # Pretrained Mistral loading
-
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
         bnb_4bit_use_double_quant=True,
@@ -78,7 +62,7 @@ def main(output_path: str):
         quantization_config=bnb_config,
         device_map='auto',
     )
-
+    model = PeftModel.from_pretrained(model, peft_model_id)
 
     tokenizer.pad_token = tokenizer.eos_token
     collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)

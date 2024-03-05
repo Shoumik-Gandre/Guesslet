@@ -25,7 +25,6 @@ import typer
 
 
 def main(model_save_path: str):
-    transformers.logging.set_verbosity_error()
     RANDOM_SEED = 38
     model_name = "tiiuae/falcon-7b"
     dataset = load_dataset("tau/commonsense_qa")
