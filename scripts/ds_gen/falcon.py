@@ -1,9 +1,10 @@
 from functools import partial
-from typing import Dict, Iterable, TypedDict
-from datasets import Dataset, Features, ClassLabel, Sequence, Value
+from typing import Dict, Iterable, List, TypedDict
+from datasets import Dataset, Features, Sequence, Value
 import torch
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
+import typer
 
 from guesslet import CommonSenseQAPrompt
 from transformers import (
@@ -28,8 +29,8 @@ class BatchInput(TypedDict):
 
 
 class FeatureDict(TypedDict):
-    sentence: str
-    logits: torch.FloatTensor
+    sentences: List[str]
+    logits_list: List[torch.FloatTensor]
 
 
 def falcon_tokenize(sample: PromptDict, tokenizer: PreTrainedTokenizer) -> BatchEncoding: 
@@ -41,28 +42,29 @@ def process_batch(batch: BatchInput, model: PreTrainedModel, tokenizer: PreTrain
         outputs: CausalLMOutput = model(**{k:v for k, v in batch.items() if k not in set(['length'])})
         
         logits = outputs.logits.clone().cpu()
+        logits_list: List[torch.FloatTensor] = logits.tolist()# [tensor for idx, tensor in enumerate(logits)]
         
         tokens = batch['input_ids'].clone().cpu()
         sentence = tokenizer.batch_decode(tokens, skip_special_tokens=True)
     
     return {
-        'sentence': sentence,
-        'logits': logits
+        'sentences': sentence,
+        'logits_list': logits_list
     }
 
 
-def gen_data(model: PreTrainedModel, dataloader: DataLoader) -> Iterable[FeatureDict]:
+def gen_data(model: PreTrainedModel, tokenizer, dataloader: DataLoader):
     for batch in tqdm(dataloader):
-        yield process_batch(batch)
+        output = process_batch(batch, model, tokenizer)
+        for sentence, logits in zip(output['sentences'], output['logits_list']):
+            yield {'sentence': sentence, 'logits': logits}
 
 
-def main():
-    save_path = ""
+def main(save_path: str):
     model_name = "tiiuae/falcon-7b"
     RANDOM_SEED = 38
     # Load Dataset
     dataset = load_dataset("tau/commonsense_qa")
-    model_name = "tiiuae/falcon-7b"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     prompter = CommonSenseQAPrompt()
 
@@ -109,15 +111,15 @@ def main():
     )
 
     dataset = Dataset.from_generator(
-        partial(gen_data, model=model, dataloader=dataloader), 
-        features=Features({
-            "sentence": Value("string"),
-            "logits": Sequence(Value("float"))
-        })
+        partial(gen_data, model=model, tokenizer=tokenizer, dataloader=dataloader), 
+        # features=Features({
+        #     "sentence": Value("string"),
+        #     "logits": Sequence(Value("float"))
+        # })
     )
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)
     dataset.save_to_disk(save_path)
 
 
 if __name__ == '__main__':
-    main()
+    typer.run(main)
