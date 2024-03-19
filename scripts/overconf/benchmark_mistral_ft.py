@@ -1,9 +1,9 @@
 from functools import partial
-from guesslet import PromptDict, CommonSenseQAPrompt, CommonSenseQAQuestionPrompt, FewShotPreppender
-from transformers import (
-    PreTrainedTokenizer, AutoTokenizer, AutoModelForCausalLM,
-    BitsAndBytesConfig, DataCollatorForLanguageModeling
-)
+from guesslet.prompts.cqa_prompt import CommonSenseQAQuestionPrompt, PromptDict, CommonSenseQAPrompt
+from guesslet.prompts.few_shot import FewShotPreppender
+from transformers import PreTrainedTokenizer, AutoTokenizer, AutoModelForCausalLM
+from transformers import BitsAndBytesConfig, DataCollatorForLanguageModeling
+from peft import PeftModel
 from datasets import load_dataset
 import torch
 from torch.utils.data import DataLoader
@@ -13,35 +13,21 @@ import numpy as np
 import typer
 
 
-def falcon_tokenize(sample: PromptDict, tokenizer: PreTrainedTokenizer):
-    return tokenizer(sample["prompt"], return_length=True)
+def mistral_tokenize(sample: PromptDict, tokenizer: PreTrainedTokenizer, max_length=None):
+    return tokenizer(sample["prompt"])
 
 
 def answer_key_to_index(sample):
     return {'answer': ord(sample['answer']) - ord('A')}
 
 
-def main(output_path: str):
+def main(output_path: str,  peft_model_id: str):
     RANDOM_SEED = 38
-    model_name = "tiiuae/falcon-7b"
+    model_name = "mistralai/Mistral-7B-v0.1"
     dataset = load_dataset("tau/commonsense_qa")
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     prompter = CommonSenseQAPrompt()
     question_prompter = CommonSenseQAQuestionPrompt()
-
-    # Few Shot
-    rng = np.random.default_rng(seed=RANDOM_SEED)
-    few_shot_indexes = rng.choice(dataset["train"].num_rows, size=3, replace=False)
-    fewshot_examples = (
-        dataset["train"]
-            .shuffle(seed=RANDOM_SEED)
-            # Select the quantity of few shot examples
-            .select(few_shot_indexes)
-            # Create prompt string from structured data
-            .map(prompter, desc="Prompt Creation: ")
-    )
-
-    few_shot_preppeder = FewShotPreppender(examples=fewshot_examples['prompt'])
 
     # Prepare inference Dataset
     inference_dataset = (
@@ -49,9 +35,8 @@ def main(output_path: str):
         # Create prompt string from structured data
         .map(question_prompter, desc="Prompt Creation: ")
         # Prepend few shot strings
-        .map(few_shot_preppeder, desc="Few Shot Prepend: ")
         .map(answer_key_to_index, desc='Ans to Idx: ')
-        .map(partial(falcon_tokenize, tokenizer=tokenizer),
+        .map(partial(mistral_tokenize, tokenizer=tokenizer),
             batched=True,
             remove_columns=[
                 'id',
@@ -80,7 +65,7 @@ def main(output_path: str):
         quantization_config=bnb_config,
         device_map='auto',
     )
-
+    model = PeftModel.from_pretrained(model, peft_model_id)
 
     tokenizer.pad_token = tokenizer.eos_token
     collator = DataCollatorForLanguageModeling(tokenizer, mlm=False)
@@ -92,10 +77,6 @@ def main(output_path: str):
     )
 
     token_ids = tokenizer.convert_tokens_to_ids(["A", "B", "C", "D", "E"])
-    token_id_to_assigned_id = {
-        token_id: assigned_id
-        for assigned_id, token_id in enumerate(token_ids)
-    }
 
     pred_labels = []
     truth_labels = []
@@ -105,7 +86,7 @@ def main(output_path: str):
         with torch.no_grad():
             outputs = model(**{k:v for k, v in batch.items() if k not in set(['length', 'answer'])})
             # -3 is the place where the answer token is located
-            logits = outputs.logits[range(outputs.logits.shape[0]), batch['length']-1]
+            logits = outputs.logits[range(outputs.logits.shape[0]), -1]
             # extract logits values at tokens corresponding to letters "a", "b", "c", "d", "e"
             choice_logits = logits[:, token_ids]
             # calculate softmax of the logits and get model label predictions

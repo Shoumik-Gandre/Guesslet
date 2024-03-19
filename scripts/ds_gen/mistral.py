@@ -33,7 +33,7 @@ class FeatureDict(TypedDict):
     logits_list: List[torch.FloatTensor]
 
 
-def falcon_tokenize(sample: PromptDict, tokenizer: PreTrainedTokenizer) -> BatchEncoding: 
+def mistral_tokenize(sample: PromptDict, tokenizer: PreTrainedTokenizer, max_length=None):
     return tokenizer(sample["prompt"])
 
 
@@ -61,7 +61,7 @@ def gen_data(model: PreTrainedModel, tokenizer, dataloader: DataLoader):
 
 
 def main(save_path: str):
-    model_name = "tiiuae/falcon-7b"
+    model_name = "mistralai/Mistral-7B-v0.1"
     RANDOM_SEED = 38
     # Load Dataset
     dataset = load_dataset("tau/commonsense_qa")
@@ -73,7 +73,7 @@ def main(save_path: str):
         dataset
         # Create prompt string from structured data
         .map(prompter, desc="Prompt Creation: ")
-        .map(partial(falcon_tokenize, tokenizer=tokenizer),
+        .map(partial(mistral_tokenize, tokenizer=tokenizer),
             batched=True,
             remove_columns=[
                 'id',
